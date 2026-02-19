@@ -1,103 +1,56 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import { useEffect, useState } from "react";
 
-import { supabase } from "../../../lib/supabase";
+function getHashAndQuery(url: string) {
+  // Returns { hash: "a=b&c=d", query: "x=y" }
+  const out = { hash: "", query: "" };
 
-export const dynamic = "force-dynamic";
-
-function parseParams(raw: string) {
-  const out: Record<string, string> = {};
-  const s = raw.replace(/^[?#]/, "");
-  if (!s) return out;
-
-  for (const part of s.split("&")) {
-    if (!part) continue;
-    const [k, v = ""] = part.split("=");
-    const key = decodeURIComponent(k.replace(/\+/g, " "));
-    const val = decodeURIComponent(v.replace(/\+/g, " "));
-    out[key] = val;
+  const qIndex = url.indexOf("?");
+  if (qIndex >= 0) {
+    const afterQ = url.slice(qIndex + 1);
+    out.query = afterQ.split("#")[0] ?? "";
   }
+
+  const hIndex = url.indexOf("#");
+  if (hIndex >= 0) out.hash = url.slice(hIndex + 1) ?? "";
+
   return out;
 }
 
 export default function AuthCallbackPage() {
-  const router = useRouter();
-  const [status, setStatus] = useState("Finishing authentication…");
+  const [msg, setMsg] = useState("Finishing sign-in…");
 
   useEffect(() => {
-    let cancelled = false;
+    try {
+      // We don’t do any Supabase work here.
+      // This page only exists so email links never crash build,
+      // and we can forward recovery flows to /auth/reset.
+      const href = window.location.href;
+      const { hash } = getHashAndQuery(href);
 
-    async function run() {
-      try {
-        if (typeof window === "undefined") return;
-
-        // Supabase recovery links usually deliver tokens in the URL hash.
-        const hashParams = parseParams(window.location.hash);
-        const queryParams = parseParams(window.location.search);
-
-        const params = { ...queryParams, ...hashParams };
-
-        const errorDesc = params.error_description || params.error;
-        if (errorDesc) {
-          setStatus("Link error. Redirecting…");
-          router.replace("/auth/reset");
-          return;
-        }
-
-        const flowType = String(params.type ?? "").toLowerCase();
-        const isRecovery = flowType === "recovery";
-
-        const code = params.code;
-        const access_token = params.access_token;
-        const refresh_token = params.refresh_token;
-
-        if (code) {
-          setStatus("Verifying link…");
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) throw error;
-        } else if (access_token && refresh_token) {
-          setStatus("Restoring session…");
-          const { error } = await supabase.auth.setSession({
-            access_token,
-            refresh_token,
-          });
-          if (error) throw error;
-        } else {
-          // If we land here without tokens, just send them to reset (it will show guidance)
-          setStatus("No token found. Redirecting…");
-          router.replace("/auth/reset");
-          return;
-        }
-
-        if (cancelled) return;
-
-        // For recovery flow always go to reset page.
-        if (isRecovery) {
-          router.replace("/auth/reset");
-        } else {
-          // If you ever use this for magic links/email confirm in the future:
-          router.replace("/");
-        }
-      } catch (e: any) {
-        if (cancelled) return;
-        setStatus("Could not complete authentication. Redirecting…");
-        router.replace("/auth/reset");
+      // If this is a recovery link, forward the full hash to /auth/reset
+      // (Supabase puts tokens in the hash fragment)
+      if (hash && hash.toLowerCase().includes("type=recovery")) {
+        window.location.replace(`/auth/reset#${hash}`);
+        return;
       }
+
+      // Otherwise, just go home (or you can change this later)
+      window.location.replace("/");
+    } catch {
+      // If anything weird happens, just go home.
+      window.location.replace("/");
     }
-
-    run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
+  }, []);
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 20, marginBottom: 8 }}>Neat Notes</h1>
-      <p style={{ opacity: 0.8 }}>{status}</p>
+      <h1 style={{ marginBottom: 8 }}>Neat Notes</h1>
+      <p style={{ opacity: 0.8 }}>{msg}</p>
     </main>
   );
 }
