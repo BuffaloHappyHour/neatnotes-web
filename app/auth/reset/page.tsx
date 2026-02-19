@@ -21,13 +21,32 @@ function parseHashParams() {
   return out;
 }
 
+function safeRedirectUrlToApp() {
+  // Keep this hardcoded + stable.
+  // You can change the path later if you want a dedicated "Reset Complete" screen.
+  return "neatnotes://auth/callback?type=recovery_done";
+}
+
+function tryOpenApp(deepLink: string) {
+  // Attempt to open the app (mobile browsers may block automatic navigation).
+  // We'll also render a button as a fallback.
+  try {
+    window.location.href = deepLink;
+  } catch {
+    // noop
+  }
+}
+
 export default function ResetPage() {
-  const [status, setStatus] = useState<"booting" | "ready" | "error">("booting");
+  const [status, setStatus] = useState<"booting" | "ready" | "done" | "error">("booting");
   const [message, setMessage] = useState<string>("Preparing secure reset…");
 
   const [pw1, setPw1] = useState("");
   const [pw2, setPw2] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const [deepLink] = useState<string>(() => safeRedirectUrlToApp());
+  const [showOpenApp, setShowOpenApp] = useState(false);
 
   const passwordsOk = useMemo(() => {
     if (pw1.trim().length < 8) return false;
@@ -108,8 +127,16 @@ export default function ResetPage() {
       const { error } = await supabase.auth.updateUser({ password: pw1.trim() });
       if (error) throw error;
 
-      alert("Password updated. You can return to the app and sign in.");
-      // Optional: you can redirect to a simple success page later.
+      // Move into "done" state first so UI updates even if browser blocks deep link.
+      setStatus("done");
+      setMessage("Password updated. Returning you to Neat Notes…");
+
+      // Attempt auto-open immediately
+      tryOpenApp(deepLink);
+
+      // If the browser blocks it, show the fallback button after a beat.
+      // (This also covers cases where the app is installed but the OS doesn’t auto-switch.)
+      setTimeout(() => setShowOpenApp(true), 650);
     } catch (e: any) {
       alert(String(e?.message ?? e));
     } finally {
@@ -131,7 +158,12 @@ export default function ResetPage() {
               value={pw1}
               onChange={(e) => setPw1(e.target.value)}
               placeholder="At least 8 characters"
-              style={{ padding: 12, borderRadius: 8, border: "1px solid #444", background: "transparent" }}
+              style={{
+                padding: 12,
+                borderRadius: 8,
+                border: "1px solid #444",
+                background: "transparent",
+              }}
             />
           </label>
 
@@ -141,7 +173,12 @@ export default function ResetPage() {
               type="password"
               value={pw2}
               onChange={(e) => setPw2(e.target.value)}
-              style={{ padding: 12, borderRadius: 8, border: "1px solid #444", background: "transparent" }}
+              style={{
+                padding: 12,
+                borderRadius: 8,
+                border: "1px solid #444",
+                background: "transparent",
+              }}
             />
           </label>
 
@@ -160,7 +197,46 @@ export default function ResetPage() {
           </button>
 
           <p style={{ fontSize: 12, opacity: 0.75 }}>
-            After saving, return to the Neat Notes app and sign in with your new password.
+            You’ll be sent back to the Neat Notes app after saving.
+          </p>
+        </div>
+      ) : null}
+
+      {status === "done" ? (
+        <div style={{ display: "grid", gap: 12 }}>
+          <p style={{ fontSize: 14, opacity: 0.85 }}>
+            If Neat Notes didn’t open automatically, tap below:
+          </p>
+
+          {showOpenApp ? (
+            <a
+              href={deepLink}
+              style={{
+                display: "inline-block",
+                padding: 12,
+                borderRadius: 10,
+                textDecoration: "none",
+                textAlign: "center",
+                border: "1px solid #444",
+              }}
+            >
+              Open Neat Notes
+            </a>
+          ) : null}
+
+          <p style={{ fontSize: 12, opacity: 0.75 }}>
+            If the button doesn’t work, open Neat Notes manually and sign in with your new password.
+          </p>
+        </div>
+      ) : null}
+
+      {status === "error" ? (
+        <div style={{ display: "grid", gap: 12 }}>
+          <p style={{ fontSize: 13, opacity: 0.85 }}>
+            Something prevented a secure reset session from loading.
+          </p>
+          <p style={{ fontSize: 12, opacity: 0.75 }}>
+            Please request a new reset email and open it on this same phone.
           </p>
         </div>
       ) : null}
