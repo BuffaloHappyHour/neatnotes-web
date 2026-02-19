@@ -1,61 +1,89 @@
-// neatnotes-web/app/auth/callback/page.tsx
 "use client";
 
-import { supabase } from "@/lib/supabase";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+
+import { supabase } from "../../../lib/supabase";
+
+export const dynamic = "force-dynamic";
+
+function parseParams(raw: string) {
+  const out: Record<string, string> = {};
+  const s = raw.replace(/^[?#]/, "");
+  if (!s) return out;
+
+  for (const part of s.split("&")) {
+    if (!part) continue;
+    const [k, v = ""] = part.split("=");
+    const key = decodeURIComponent(k.replace(/\+/g, " "));
+    const val = decodeURIComponent(v.replace(/\+/g, " "));
+    out[key] = val;
+  }
+  return out;
+}
 
 export default function AuthCallbackPage() {
   const router = useRouter();
-  const search = useSearchParams();
-  const [msg, setMsg] = useState("Finishing authentication…");
+  const [status, setStatus] = useState("Finishing authentication…");
 
   useEffect(() => {
     let cancelled = false;
 
     async function run() {
       try {
-        // Supabase can return:
-        // - ?code=... (PKCE flow)  -> exchangeCodeForSession
-        // - hash tokens (#access_token=...&refresh_token=...) -> setSession
-        const code = search.get("code");
+        if (typeof window === "undefined") return;
 
-        // Parse hash tokens if present
-        const hash = typeof window !== "undefined" ? window.location.hash : "";
-        const hashParams = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
-        const access_token = hashParams.get("access_token") ?? "";
-        const refresh_token = hashParams.get("refresh_token") ?? "";
-        const error = search.get("error") || hashParams.get("error");
-        const error_description = search.get("error_description") || hashParams.get("error_description");
+        // Supabase recovery links usually deliver tokens in the URL hash.
+        const hashParams = parseParams(window.location.hash);
+        const queryParams = parseParams(window.location.search);
 
-        if (error || error_description) {
-          throw new Error(String(error_description || error));
-        }
+        const params = { ...queryParams, ...hashParams };
 
-        if (code) {
-          const { error: exErr } = await supabase.auth.exchangeCodeForSession(code);
-          if (exErr) throw exErr;
-        } else if (access_token && refresh_token) {
-          const { error: setErr } = await supabase.auth.setSession({ access_token, refresh_token });
-          if (setErr) throw setErr;
-        }
-
-        // At this point we should have a session if the link was valid.
-        const { data } = await supabase.auth.getSession();
-        const authed = !!data.session?.user;
-
-        if (cancelled) return;
-
-        if (!authed) {
-          setMsg("No session found. Please request a new reset email and try again.");
+        const errorDesc = params.error_description || params.error;
+        if (errorDesc) {
+          setStatus("Link error. Redirecting…");
+          router.replace("/auth/reset");
           return;
         }
 
-        // Send them to the reset page (Pattern B UX)
-        router.replace("/auth/reset");
+        const flowType = String(params.type ?? "").toLowerCase();
+        const isRecovery = flowType === "recovery";
+
+        const code = params.code;
+        const access_token = params.access_token;
+        const refresh_token = params.refresh_token;
+
+        if (code) {
+          setStatus("Verifying link…");
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) throw error;
+        } else if (access_token && refresh_token) {
+          setStatus("Restoring session…");
+          const { error } = await supabase.auth.setSession({
+            access_token,
+            refresh_token,
+          });
+          if (error) throw error;
+        } else {
+          // If we land here without tokens, just send them to reset (it will show guidance)
+          setStatus("No token found. Redirecting…");
+          router.replace("/auth/reset");
+          return;
+        }
+
+        if (cancelled) return;
+
+        // For recovery flow always go to reset page.
+        if (isRecovery) {
+          router.replace("/auth/reset");
+        } else {
+          // If you ever use this for magic links/email confirm in the future:
+          router.replace("/");
+        }
       } catch (e: any) {
         if (cancelled) return;
-        setMsg(String(e?.message ?? e ?? "Auth callback failed."));
+        setStatus("Could not complete authentication. Redirecting…");
+        router.replace("/auth/reset");
       }
     }
 
@@ -64,12 +92,12 @@ export default function AuthCallbackPage() {
     return () => {
       cancelled = true;
     };
-  }, [router, search]);
+  }, [router]);
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 20, marginBottom: 12 }}>Neat Notes</h1>
-      <p>{msg}</p>
+      <h1 style={{ fontSize: 20, marginBottom: 8 }}>Neat Notes</h1>
+      <p style={{ opacity: 0.8 }}>{status}</p>
     </main>
   );
 }
